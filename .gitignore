@@ -3,3 +3,4 @@
 *.key
 *.crt
 logs/
+__pycache__/
