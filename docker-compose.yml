@@ -1,12 +1,16 @@
 services:
   kokoro:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    image: ${KOKORO_IMAGE:-ghcr.io/technicalheist/kokoro-voice-server:latest}
+    # Rebuild locally instead of pulling: docker compose build
+    build: .
     container_name: kokoro-fastapi
     restart: unless-stopped
     # Host networking keeps the port on 127.0.0.1:8880 for the reverse proxy.
     # On Docker Desktop (no host networking) drop this and publish:
     #   ports: ["8880:8880"]
     network_mode: host
+    env_file:
+      - .env
     environment:
       USE_GPU: "false"
       DEVICE: cpu
@@ -14,4 +18,5 @@ services:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8880/health"]
       interval: 30s
       timeout: 5s
+      start_period: 300s
       retries: 5
