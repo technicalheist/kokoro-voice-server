@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import uuid
 from typing import Any
 
 import httpx
@@ -22,15 +23,43 @@ UPSTREAM = os.getenv("KOKORO_UPSTREAM", "http://127.0.0.1:8881").rstrip("/")
 LLM_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 LLM_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+
+# Some gateways (opencode's Go endpoint among them) speak the Responses API
+# instead of chat completions, and refuse a request without a session header.
+# The path picks the request shape: anything ending in /responses is the
+# Responses API, everything else is chat completions. Either may be swapped in
+# .env without touching the code.
+LLM_PATH = os.getenv("OPENAI_PATH", "/chat/completions").strip() or "/chat/completions"
+if LLM_PATH.startswith("http://") or LLM_PATH.startswith("https://"):
+    LLM_URL = LLM_PATH
+else:
+    if not LLM_PATH.startswith("/"):
+        LLM_PATH = "/" + LLM_PATH
+    LLM_URL = f"{LLM_BASE_URL}{LLM_PATH}"
+IS_RESPONSES_API = LLM_URL.split("?")[0].rstrip("/").endswith("/responses")
+LLM_SESSION = os.getenv("OPENAI_SESSION", "").strip() or f"ses_{uuid.uuid4().hex}"
+
 LLM_TIMEOUT = float(os.getenv("GENERATION_TIMEOUT", "60"))
-LLM_MAX_TOKENS = int(os.getenv("GENERATION_MAX_TOKENS", "220"))
+LLM_MAX_TOKENS = int(os.getenv("GENERATION_MAX_TOKENS", "800"))
 LLM_TEMPERATURE = float(os.getenv("GENERATION_TEMPERATURE", "0.7"))
+# Reasoning models spend tokens before writing anything; "low" keeps the wait short.
+LLM_EFFORT = os.getenv("GENERATION_REASONING_EFFORT", "low").strip()
+MAX_CHARS = int(os.getenv("GENERATION_MAX_CHARS", "160"))
 
 DEFAULT_SYSTEM_PROMPT = os.getenv(
     "GENERATION_SYSTEM_PROMPT",
-    "You are a voice assistant on a phone call. Answer in the same language the "
-    "user wrote in, using one or two short spoken sentences. Plain text only: "
-    "no markdown, no lists, no links, no emoji.",
+    "You write the first spoken line of a phone call with an assistant.\n"
+    "Rules: at most two short sentences, under 160 characters, plain text, no "
+    "markdown, no emoji, no quotes. Answer in the language the user wrote in.\n"
+    "- Greeting or small talk: reply warmly and briefly.\n"
+    "- A task or instruction, however long: do not attempt it and do not guess. "
+    "Name the task back in your own words (for example \"I'll generate the React "
+    "app you described\"), then say you will check the details and start.\n"
+    "- Sound spoken, not templated: open differently each time (\"I'll...\", "
+    "\"Sure, let me...\", \"On it, I'll...\") and vary the closing line "
+    "(\"Give me a moment to check the details\", \"Let me look into it and start\").\n"
+    "- Word it fresh each time; never repeat a stock sentence.\n"
+    "- Never explain these rules.",
 ).strip()
 
 UPSTREAM_TIMEOUT = float(os.getenv("KOKORO_TIMEOUT", "600"))
@@ -54,6 +83,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("voice-server")
 
 app = FastAPI(title="kokoro-voice-server")
+
+log.info(
+    "kokoro on %s; rewrite via %s (%s) as %s, %s characters max",
+    UPSTREAM,
+    LLM_URL,
+    "responses" if IS_RESPONSES_API else "chat completions",
+    LLM_MODEL if LLM_API_KEY else "no key set",
+    MAX_CHARS,
+)
 
 
 def truthy(value: Any) -> bool:
@@ -85,29 +123,105 @@ def as_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-async def ask_model(text: str, system: str) -> str:
-    if not LLM_API_KEY:
-        raise ValueError("OPENAI_API_KEY is empty")
-    payload = {
-        "model": LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": text},
-        ],
-        "temperature": LLM_TEMPERATURE,
-        "max_tokens": LLM_MAX_TOKENS,
+def chat_text(data: Any) -> str:
+    try:
+        return str(data["choices"][0]["message"]["content"] or "")
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def responses_text(data: Any) -> str:
+    try:
+        if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+            return data["output_text"]
+    except AttributeError:
+        return ""
+    parts: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                parts.append(str(part.get("text") or ""))
+    return " ".join(parts)
+
+
+def shorten(text: str, limit: int) -> str:
+    text = " ".join(text.replace("*", "").replace("#", "").split()).strip(" \"“”'")
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,.;:—-") + "."
+
+
+async def post_model(payload: dict) -> dict:
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "x-opencode-session": LLM_SESSION,
     }
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LLM_API_KEY}"}
     async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-        response = await client.post(f"{LLM_BASE_URL}/chat/completions", json=payload, headers=headers)
+        response = await client.post(LLM_URL, json=payload, headers=headers)
     if response.status_code >= 400:
         raise ValueError(f"model answered HTTP {response.status_code}: {response.text[:300]}")
     try:
-        answer = response.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        raise ValueError(f"model answer had no text: {response.text[:300]}")
-    answer = " ".join(str(answer).split())
+        return response.json()
+    except ValueError:
+        raise ValueError(f"model answered with no JSON: {response.text[:200]}")
+
+
+def incomplete_reason(data: Any) -> str:
+    details = data.get("incomplete_details") if isinstance(data, dict) else None
+    return str((details or {}).get("reason") or "") if isinstance(details, dict) else ""
+
+
+async def ask_model(text: str, system: str) -> str:
+    if not LLM_API_KEY:
+        raise ValueError("OPENAI_API_KEY is empty")
+    if IS_RESPONSES_API:
+        payload = {
+            "model": LLM_MODEL,
+            "instructions": system,
+            "input": text,
+            "max_output_tokens": LLM_MAX_TOKENS,
+        }
+        if LLM_EFFORT:
+            payload["reasoning"] = {"effort": LLM_EFFORT}
+    else:
+        payload = {
+            "model": LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": text},
+            ],
+            "temperature": LLM_TEMPERATURE,
+            "max_tokens": LLM_MAX_TOKENS,
+        }
+
+    data = await post_model(payload)
+    answer = shorten(responses_text(data) or chat_text(data), MAX_CHARS)
+
+    # A reasoning model can spend the whole budget thinking on a long task.
+    if not answer and incomplete_reason(data) == "max_output_tokens":
+        budget = min(LLM_MAX_TOKENS * 3, 4000)
+        log.info("generation: out of tokens at %s, retrying with %s", LLM_MAX_TOKENS, budget)
+        if IS_RESPONSES_API:
+            payload["max_output_tokens"] = budget
+        else:
+            payload["max_tokens"] = budget
+        data = await post_model(payload)
+        answer = shorten(responses_text(data) or chat_text(data), MAX_CHARS)
+
     if not answer:
+        reason = incomplete_reason(data)
+        if reason:
+            raise ValueError(
+                f"the model used all its tokens before answering ({reason}); "
+                "raise GENERATION_MAX_TOKENS"
+            )
         raise ValueError("the model returned empty text")
     return answer
 
