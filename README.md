@@ -67,8 +67,10 @@ curl -s -X POST http://127.0.0.1:8880/v1/audio/speech \
 - A per-request system prompt may be set in the `X-Generation-System` header.
 
 The default prompt makes the model a first-responder, not an answerer: a
-greeting gets a warm one-liner, and a task or long instruction gets a short
-"let me check and come back to you" instead of a guess. Every answer is trimmed
+greeting gets a warm one-liner, a task or long instruction gets its name back
+plus "let me check and start", and a vague request ("what is the status", "any
+update") is treated as the work already in progress and answered with a quick
+"checking, I'll report back" rather than a question. Every answer is trimmed
 to `GENERATION_MAX_CHARS` (100 by default), so it stays one quick spoken line.
 
 Settings live in `.env`:
