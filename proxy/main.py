@@ -43,7 +43,7 @@ LLM_TIMEOUT = float(os.getenv("GENERATION_TIMEOUT", "60"))
 LLM_MAX_TOKENS = int(os.getenv("GENERATION_MAX_TOKENS", "800"))
 LLM_TEMPERATURE = float(os.getenv("GENERATION_TEMPERATURE", "0.7"))
 # Reasoning models spend tokens before writing anything; "low" keeps the wait short.
-LLM_EFFORT = os.getenv("GENERATION_REASONING_EFFORT", "low").strip()
+LLM_EFFORT = os.getenv("GENERATION_REASONING_EFFORT", "minimal").strip()
 MAX_CHARS = int(os.getenv("GENERATION_MAX_CHARS", "160"))
 
 DEFAULT_SYSTEM_PROMPT = os.getenv(

@@ -83,7 +83,7 @@ Settings live in `.env`:
 | `GENERATION_SYSTEM_PROMPT` | optional; defaults to the first-responder prompt above |
 | `GENERATION_MAX_CHARS` | spoken answer cap, default 160 |
 | `GENERATION_MAX_TOKENS` | model answer budget, default 800: reasoning models spend most of it thinking |
-| `GENERATION_REASONING_EFFORT` | `low` (default), `medium`, `high` or empty; Responses API only |
+| `GENERATION_REASONING_EFFORT` | `minimal` (default, fastest), `low`, `medium`, `high` or empty; Responses API only |
 | `GENERATION_TEMPERATURE` | chat completions only, default 0.7 |
 | `GENERATION_TIMEOUT` | seconds, default 60 |
 
