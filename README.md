@@ -4,6 +4,9 @@ A self-hosted, OpenAI-compatible text-to-speech server, plus how to point the
 OpenCode Android app at it so voice previews and the key-free local call speak
 with your own voice instead of a paid API.
 
+Built on [remsky/Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) — this
+repo is the deployment and the phone-side wiring, not a fork of that code.
+
 Tested with: OnePlus API 36 phone, Ubuntu server, CPU-only Kokoro, Tailscale +
 nginx + Let's Encrypt.
 
