@@ -69,7 +69,7 @@ curl -s -X POST http://127.0.0.1:8880/v1/audio/speech \
 The default prompt makes the model a first-responder, not an answerer: a
 greeting gets a warm one-liner, and a task or long instruction gets a short
 "let me check and come back to you" instead of a guess. Every answer is trimmed
-to `GENERATION_MAX_CHARS` (160 by default), so it stays one quick spoken line.
+to `GENERATION_MAX_CHARS` (100 by default), so it stays one quick spoken line.
 
 Settings live in `.env`:
 
@@ -81,7 +81,7 @@ Settings live in `.env`:
 | `OPENAI_PATH` | appended to the base URL: `/chat/completions` (default) or `/responses`, e.g. `https://opencode.ai/inference/go` + `/openai/v1/chat/completions` or `/openai/v1/responses`; a full URL also works |
 | `OPENAI_SESSION` | optional session header some gateways demand; generated when empty |
 | `GENERATION_SYSTEM_PROMPT` | optional; defaults to the first-responder prompt above |
-| `GENERATION_MAX_CHARS` | spoken answer cap, default 160 |
+| `GENERATION_MAX_CHARS` | spoken answer cap, default 100; the prompt states it too |
 | `GENERATION_MAX_TOKENS` | model answer budget, default 800: reasoning models spend most of it thinking |
 | `GENERATION_REASONING_EFFORT` | `minimal` (default, fastest), `low`, `medium`, `high` or empty; Responses API only |
 | `GENERATION_TEMPERATURE` | chat completions only, default 0.7 |

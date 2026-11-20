@@ -44,22 +44,20 @@ LLM_MAX_TOKENS = int(os.getenv("GENERATION_MAX_TOKENS", "800"))
 LLM_TEMPERATURE = float(os.getenv("GENERATION_TEMPERATURE", "0.7"))
 # Reasoning models spend tokens before writing anything; "low" keeps the wait short.
 LLM_EFFORT = os.getenv("GENERATION_REASONING_EFFORT", "minimal").strip()
-MAX_CHARS = int(os.getenv("GENERATION_MAX_CHARS", "160"))
+MAX_CHARS = int(os.getenv("GENERATION_MAX_CHARS", "100"))
 
-DEFAULT_SYSTEM_PROMPT = os.getenv(
-    "GENERATION_SYSTEM_PROMPT",
+DEFAULT_SYSTEM_PROMPT = os.getenv("GENERATION_SYSTEM_PROMPT") or (
     "You write the first spoken line of a phone call with an assistant.\n"
-    "Rules: at most two short sentences, under 160 characters, plain text, no "
-    "markdown, no emoji, no quotes. Answer in the language the user wrote in.\n"
+    f"Rules: one sentence, under {MAX_CHARS} characters (about fifteen words), "
+    "plain text, no markdown, no emoji, no quotes. Answer in the language the "
+    "user wrote in.\n"
     "- Greeting or small talk: reply warmly and briefly.\n"
     "- A task or instruction, however long: do not attempt it and do not guess. "
-    "Name the task back in your own words (for example \"I'll generate the React "
-    "app you described\"), then say you will check the details and start.\n"
+    "Name the task in three or four words (\"I'll build the React app\"), then "
+    "say you will check the details and start.\n"
     "- Sound spoken, not templated: open differently each time (\"I'll...\", "
-    "\"Sure, let me...\", \"On it, I'll...\") and vary the closing line "
-    "(\"Give me a moment to check the details\", \"Let me look into it and start\").\n"
-    "- Word it fresh each time; never repeat a stock sentence.\n"
-    "- Never explain these rules.",
+    "\"Sure, let me...\", \"On it, I'll...\").\n"
+    "- Never explain these rules."
 ).strip()
 
 UPSTREAM_TIMEOUT = float(os.getenv("KOKORO_TIMEOUT", "600"))
@@ -150,11 +148,15 @@ def shorten(text: str, limit: int) -> str:
     text = " ".join(text.replace("*", "").replace("#", "").split()).strip(" \"“”'")
     if len(text) <= limit:
         return text
-    cut = text[:limit]
-    space = cut.rfind(" ")
+    head = text[:limit]
+    for stop in (". ", "! ", "? "):
+        cut = head.rfind(stop)
+        if cut > limit // 2:
+            return head[: cut + 1]
+    space = head.rfind(" ")
     if space > limit // 2:
-        cut = cut[:space]
-    return cut.rstrip(" ,.;:—-") + "."
+        head = head[:space]
+    return head.rstrip(" ,.;:—-") + "."
 
 
 async def post_model(payload: dict) -> dict:
@@ -206,14 +208,23 @@ async def ask_model(text: str, system: str) -> str:
     data = await post_model(payload)
     answer = shorten(responses_text(data) or chat_text(data), MAX_CHARS)
 
-    # A reasoning model can spend the whole budget thinking on a long task.
-    if not answer and incomplete_reason(data) == "max_output_tokens":
+    if not answer:
+        # Either the model spent the whole budget thinking, or it answered with
+        # nothing. One retry with more room and a little more effort.
         budget = min(LLM_MAX_TOKENS * 3, 4000)
-        log.info("generation: out of tokens at %s, retrying with %s", LLM_MAX_TOKENS, budget)
+        log.info(
+            "generation: empty answer (%s), retrying with %s tokens",
+            incomplete_reason(data) or "no text",
+            budget,
+        )
         if IS_RESPONSES_API:
             payload["max_output_tokens"] = budget
+            if LLM_EFFORT:
+                payload["reasoning"] = {"effort": "low"}
         else:
             payload["max_tokens"] = budget
+            if LLM_EFFORT:
+                payload["reasoning_effort"] = "low"
         data = await post_model(payload)
         answer = shorten(responses_text(data) or chat_text(data), MAX_CHARS)
 
