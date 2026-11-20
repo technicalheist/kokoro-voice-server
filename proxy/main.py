@@ -200,6 +200,8 @@ async def ask_model(text: str, system: str) -> str:
             "temperature": LLM_TEMPERATURE,
             "max_tokens": LLM_MAX_TOKENS,
         }
+        if LLM_EFFORT:
+            payload["reasoning_effort"] = LLM_EFFORT
 
     data = await post_model(payload)
     answer = shorten(responses_text(data) or chat_text(data), MAX_CHARS)
